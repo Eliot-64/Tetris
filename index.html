@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1020" />
+    <title>Tetris</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app" aria-label="Jeu Tetris">
+      <section class="game-shell">
+        <div class="board-wrap">
+          <canvas id="game" width="300" height="600" aria-label="Terrain de Tetris"></canvas>
+          <canvas id="cinematic" width="300" height="600" aria-hidden="true"></canvas>
+          <div id="fade" class="fade"></div>
+          <div id="introOverlay" class="intro-overlay">
+            <button id="startButton" class="start-button" type="button">Jouer</button>
+          </div>
+          <div id="cinematicText" class="cinematic-text" aria-live="polite"></div>
+        </div>
+
+        <aside class="hud" aria-label="Informations">
+          <div class="hud-card score-card">
+            <span class="label">Score</span>
+            <strong id="score">0</strong>
+          </div>
+          <div class="hud-grid">
+            <div class="hud-card">
+              <span class="label">Niveau</span>
+              <strong id="level">1</strong>
+            </div>
+            <div class="hud-card">
+              <span class="label">Lignes</span>
+              <strong id="lines">0</strong>
+            </div>
+          </div>
+          <div class="hud-card next-card">
+            <span class="label">Suivante</span>
+            <canvas id="next" width="120" height="120" aria-label="Prochaine pièce"></canvas>
+          </div>
+          <div class="hud-card audio-card">
+            <label class="label" for="volume">Volume</label>
+            <input id="volume" type="range" min="0" max="1" step="0.01" value="0.42" />
+          </div>
+          <div class="hud-card controls-card">
+            <span class="label">Contrôles</span>
+            <p>← → déplacer</p>
+            <p>↑ rotation</p>
+            <p>↓ descente</p>
+            <p>Espace hard drop</p>
+            <p id="gamepadStatus">Manette : recherche</p>
+          </div>
+        </aside>
+      </section>
+
+      <nav class="touch-controls" aria-label="Contrôles tactiles">
+        <button data-action="left" aria-label="Gauche">←</button>
+        <button data-action="right" aria-label="Droite">→</button>
+        <button data-action="rotate" aria-label="Rotation">↻</button>
+        <button data-action="down" aria-label="Descente rapide">↓</button>
+        <button data-action="drop" aria-label="Hard drop">⤓</button>
+      </nav>
+    </main>
+
+    <audio id="musicMain" src="assets/tetris1.mp3" preload="auto" loop></audio>
+    <audio id="musicCinema" src="assets/tetris2.mp3" preload="auto"></audio>
+    <script src="script.js"></script>
+  </body>
+</html>
