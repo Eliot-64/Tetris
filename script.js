@@ -35,6 +35,8 @@
   const fade = document.getElementById("fade");
   const intro = document.getElementById("introOverlay");
   const startButton = document.getElementById("startButton");
+  const pauseButton = document.getElementById("pauseButton");
+  const pauseOverlay = document.getElementById("pauseOverlay");
   const textBox = document.getElementById("cinematicText");
   const mainMusic = document.getElementById("musicMain");
   const cinemaMusic = document.getElementById("musicCinema");
@@ -62,6 +64,7 @@
   let lastTime = 0;
   let running = false;
   let paused = true;
+  let userPaused = false;
   let cinematicStarted = false;
   let touchSoftDrop = false;
   let keySoftDrop = false;
@@ -70,7 +73,9 @@
   let boardDropAnimation = null;
   let gamepadPrevious = {};
   let touchRepeatTimers = {};
-  let playStartedAt = null;
+  let playElapsed = 0;
+  let playResumeAt = null;
+  let impactFlash = null;
   let audioUnlocked = false;
 
   function makeBoard() {
@@ -93,6 +98,8 @@
       matrix: SHAPES[type].map((row) => row.slice()),
       x: Math.floor(COLS / 2) - Math.ceil(SHAPES[type][0].length / 2),
       y: -1,
+      spawnAt: performance.now(),
+      rotationAt: 0,
     };
   }
 
@@ -100,24 +107,41 @@
     return Math.max(95, 780 * Math.pow(0.82, level - 1));
   }
 
-  function drawCell(context, x, y, size, color, alpha = 1, pixelOffsetY = 0) {
+  function drawCell(context, x, y, size, color, alpha = 1, pixelOffsetY = 0, scale = 1) {
     context.save();
     context.globalAlpha = alpha;
-    const px = x * size;
-    const py = y * size + pixelOffsetY;
-    const grad = context.createLinearGradient(px, py, px + size, py + size);
+    const actual = size * scale;
+    const px = x * size + (size - actual) / 2;
+    const py = y * size + pixelOffsetY + (size - actual) / 2;
+    const grad = context.createLinearGradient(px, py, px + actual, py + actual);
     grad.addColorStop(0, lighten(color, 24));
     grad.addColorStop(0.54, color);
     grad.addColorStop(1, darken(color, 22));
     context.fillStyle = grad;
     context.shadowColor = "rgba(0,0,0,.35)";
     context.shadowBlur = 8;
-    context.fillRect(px + 1, py + 1, size - 2, size - 2);
+    roundRect(context, px + 1, py + 1, actual - 2, actual - 2, Math.max(3, size * 0.1));
+    context.fill();
     context.shadowBlur = 0;
+    context.fillStyle = "rgba(255,255,255,.16)";
+    roundRect(context, px + 4, py + 4, actual - 8, Math.max(3, actual * 0.14), 3);
+    context.fill();
     context.strokeStyle = "rgba(255,255,255,.22)";
     context.lineWidth = 1;
-    context.strokeRect(px + 1.5, py + 1.5, size - 3, size - 3);
+    roundRect(context, px + 1.5, py + 1.5, actual - 3, actual - 3, Math.max(3, size * 0.1));
+    context.stroke();
     context.restore();
+  }
+
+  function roundRect(context, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    context.beginPath();
+    context.moveTo(x + r, y);
+    context.arcTo(x + width, y, x + width, y + height, r);
+    context.arcTo(x + width, y + height, x, y + height, r);
+    context.arcTo(x, y + height, x, y, r);
+    context.arcTo(x, y, x + width, y, r);
+    context.closePath();
   }
 
   function lighten(hex, amount) {
@@ -166,8 +190,23 @@
     });
     if (current?.matrix?.length && !lineClearAnimation) {
       drawGhost();
-      drawMatrix(ctx, current.matrix, current.x, current.y, BLOCK, COLORS[current.type]);
+      drawMatrix(ctx, current.matrix, current.x, current.y, BLOCK, COLORS[current.type], 1, true);
     }
+    drawImpactFlash();
+  }
+
+  function drawImpactFlash() {
+    if (!impactFlash) return;
+    const progress = Math.min(1, (performance.now() - impactFlash.start) / impactFlash.duration);
+    if (progress >= 1) {
+      impactFlash = null;
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = (1 - progress) * 0.18;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, canvas.height - BLOCK * 2.2, canvas.width, BLOCK * 2.2);
+    ctx.restore();
   }
 
   function drawClearingCell(x, y, color) {
@@ -206,12 +245,22 @@
     drawMatrix(ctx, ghost.matrix, ghost.x, ghost.y, BLOCK, COLORS[ghost.type], 0.18);
   }
 
-  function drawMatrix(context, matrix, offsetX, offsetY, size, color, alpha = 1) {
+  function drawMatrix(context, matrix, offsetX, offsetY, size, color, alpha = 1, animate = false) {
+    const spawnProgress = animate ? Math.min(1, (performance.now() - (current.spawnAt || 0)) / 150) : 1;
+    const rotateProgress = animate && current.rotationAt ? Math.min(1, (performance.now() - current.rotationAt) / 120) : 1;
+    const scale = 0.78 + 0.22 * easeOutBack(spawnProgress) + (rotateProgress < 1 ? Math.sin(rotateProgress * Math.PI) * 0.05 : 0);
+    const pixelOffsetY = animate ? (1 - spawnProgress) * -8 : 0;
     matrix.forEach((row, y) => {
       row.forEach((value, x) => {
-        if (value && y + offsetY >= 0) drawCell(context, x + offsetX, y + offsetY, size, color, alpha);
+        if (value && y + offsetY >= 0) drawCell(context, x + offsetX, y + offsetY, size, color, alpha, pixelOffsetY, scale);
       });
     });
+  }
+
+  function easeOutBack(t) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
   }
 
   function drawNext() {
@@ -255,6 +304,7 @@
       if (!collides(current, kick, 0, rotated)) {
         current.x += kick;
         current.matrix = rotated;
+        current.rotationAt = performance.now();
         playSfx("rotate");
         return;
       }
@@ -285,6 +335,8 @@
       distance++;
     }
     score += distance * 2;
+    impactFlash = { start: performance.now(), duration: 160 };
+    vibrate(18);
     playSfx("hardDrop");
     lockPiece();
   }
@@ -313,12 +365,14 @@
   function startLineClear(rows) {
     const cleared = rows.length;
     paused = true;
+    pauseClock();
     current = { type: "T", matrix: [], x: 0, y: 0 };
     lineClearAnimation = {
       rows,
       start: performance.now(),
       duration: 300 + cleared * 105,
     };
+    vibrate(22 + cleared * 18);
     playSfx("lineClear");
     lines += cleared;
     score += SCORE_TABLE[cleared] * level;
@@ -357,12 +411,15 @@
     setTimeout(() => {
       boardDropAnimation = null;
       paused = false;
+      resumeClock();
       spawnNextPiece();
     }, boardDropAnimation.duration);
   }
 
   function spawnNextPiece() {
     current = next;
+    current.spawnAt = performance.now();
+    current.rotationAt = 0;
     next = createPiece();
     if (collides(current, 0, 0)) resetGame();
     drawNext();
@@ -376,6 +433,8 @@
     score = 0;
     level = 1;
     lines = 0;
+    userPaused = false;
+    pauseOverlay.classList.remove("show");
     lineClearAnimation = null;
     boardDropAnimation = null;
     dropInterval = getDropInterval();
@@ -417,14 +476,52 @@
     intro.classList.add("hidden");
     running = true;
     paused = false;
-    if (!playStartedAt) playStartedAt = performance.now();
+    userPaused = false;
+    resumeClock();
+    pauseButton.classList.add("visible");
     unlockAudio();
   }
 
   function shouldTriggerSurprise() {
     if (cinematicStarted) return false;
-    const elapsed = playStartedAt ? performance.now() - playStartedAt : 0;
-    return level >= 10 || elapsed >= SURPRISE_TIME;
+    return level >= 10 || getPlayElapsed() >= SURPRISE_TIME;
+  }
+
+  function pauseClock() {
+    if (!playResumeAt) return;
+    playElapsed += performance.now() - playResumeAt;
+    playResumeAt = null;
+  }
+
+  function resumeClock() {
+    if (!playResumeAt) playResumeAt = performance.now();
+  }
+
+  function getPlayElapsed() {
+    return playElapsed + (playResumeAt ? performance.now() - playResumeAt : 0);
+  }
+
+  function togglePause() {
+    if (!running || cinematicStarted || lineClearAnimation || boardDropAnimation) return;
+    userPaused = !userPaused;
+    paused = userPaused;
+    pauseOverlay.classList.toggle("show", userPaused);
+    pauseButton.textContent = userPaused ? "Reprendre" : "Pause";
+    if (userPaused) {
+      pauseClock();
+      if (audioUnlocked) mainMusic.pause();
+      stopTouchRepeats();
+      touchSoftDrop = false;
+      keySoftDrop = false;
+      gamepadSoftDrop = false;
+    } else {
+      resumeClock();
+      if (audioUnlocked) mainMusic.play().catch(() => {});
+    }
+  }
+
+  function vibrate(ms) {
+    if (navigator.vibrate) navigator.vibrate(ms);
   }
 
   function unlockAudio() {
@@ -463,10 +560,15 @@
     cinematicStarted = true;
     paused = true;
     running = false;
+    pauseClock();
     touchSoftDrop = false;
     keySoftDrop = false;
     gamepadSoftDrop = false;
     stopTouchRepeats();
+    pauseButton.classList.remove("visible");
+    pauseOverlay.classList.remove("show");
+    boardWrap.classList.add("pre-cinematic");
+    await wait(520);
     fade.classList.add("show");
     fadeAudio(mainMusic, 0, 1500, () => {
       mainMusic.pause();
@@ -475,6 +577,7 @@
     await wait(1500);
     board = makeBoard();
     current = { type: "T", matrix: [], x: 0, y: 0 };
+    boardWrap.classList.remove("pre-cinematic");
     boardWrap.classList.add("is-cinematic");
     fade.classList.remove("show");
     cinemaMusic.volume = 0;
@@ -671,18 +774,24 @@
       down: pad.buttons[13]?.pressed || pad.axes[1] > 0.55,
       rotate: pad.buttons[0]?.pressed,
       drop: pad.buttons[2]?.pressed,
+      pause: pad.buttons[9]?.pressed,
     };
     if (pressed.left && !gamepadPrevious.left) move(-1);
     if (pressed.right && !gamepadPrevious.right) move(1);
     if (pressed.rotate && !gamepadPrevious.rotate) rotate();
     if (pressed.drop && !gamepadPrevious.drop) hardDrop();
+    if (pressed.pause && !gamepadPrevious.pause) togglePause();
     gamepadSoftDrop = pressed.down;
     gamepadPrevious = pressed;
   }
 
   document.addEventListener("keydown", (event) => {
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(event.code)) {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "KeyP", "Escape"].includes(event.code)) {
       event.preventDefault();
+    }
+    if (event.code === "KeyP" || event.code === "Escape") {
+      togglePause();
+      return;
     }
     if (!audioUnlocked) unlockAudio();
     if (event.code === "ArrowLeft") move(-1);
@@ -749,6 +858,8 @@
     Object.keys(touchRepeatTimers).forEach(stopTouchRepeat);
     document.querySelectorAll("[data-action].pressed").forEach((button) => button.classList.remove("pressed"));
   }
+
+  pauseButton.addEventListener("click", togglePause);
 
   volume.addEventListener("input", () => {
     const value = Number(volume.value);
