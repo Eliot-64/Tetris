@@ -2,7 +2,7 @@
 <html lang="fr">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#0b1020" />
     <title>Tetris</title>
     <link rel="stylesheet" href="style.css" />
@@ -56,15 +56,19 @@
 
       <nav class="touch-controls" aria-label="Contrôles tactiles">
         <button data-action="left" aria-label="Gauche">←</button>
-        <button data-action="right" aria-label="Droite">→</button>
         <button data-action="rotate" aria-label="Rotation">↻</button>
+        <button data-action="right" aria-label="Droite">→</button>
         <button data-action="down" aria-label="Descente rapide">↓</button>
-        <button data-action="drop" aria-label="Hard drop">⤓</button>
+        <button class="hard-button" data-action="drop" aria-label="Hard drop">Hard Drop</button>
       </nav>
     </main>
 
     <audio id="musicMain" src="assets/tetris1.mp3" preload="auto" loop></audio>
     <audio id="musicCinema" src="assets/tetris2.mp3" preload="auto"></audio>
+    <audio id="sfxLineClear" src="assets/line-clear.mp3" preload="auto"></audio>
+    <audio id="sfxRotate" src="assets/rotate.mp3" preload="auto"></audio>
+    <audio id="sfxHardDrop" src="assets/hard-drop.mp3" preload="auto"></audio>
+    <audio id="sfxLevelUp" src="assets/level-up.mp3" preload="auto"></audio>
     <script src="script.js"></script>
   </body>
 </html>

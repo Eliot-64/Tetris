@@ -5,6 +5,7 @@
   const ROWS = 20;
   const BLOCK = 30;
   const LEVEL_LINES = 10;
+  const SURPRISE_TIME = 180000;
   const COLORS = {
     I: "#55d8ff",
     J: "#5e7cff",
@@ -37,6 +38,12 @@
   const textBox = document.getElementById("cinematicText");
   const mainMusic = document.getElementById("musicMain");
   const cinemaMusic = document.getElementById("musicCinema");
+  const sfx = {
+    lineClear: document.getElementById("sfxLineClear"),
+    rotate: document.getElementById("sfxRotate"),
+    hardDrop: document.getElementById("sfxHardDrop"),
+    levelUp: document.getElementById("sfxLevelUp"),
+  };
   const volume = document.getElementById("volume");
   const gamepadStatus = document.getElementById("gamepadStatus");
   const scoreEl = document.getElementById("score");
@@ -59,7 +66,11 @@
   let touchSoftDrop = false;
   let keySoftDrop = false;
   let gamepadSoftDrop = false;
+  let lineClearAnimation = null;
+  let boardDropAnimation = null;
   let gamepadPrevious = {};
+  let touchRepeatTimers = {};
+  let playStartedAt = null;
   let audioUnlocked = false;
 
   function makeBoard() {
@@ -89,11 +100,11 @@
     return Math.max(95, 780 * Math.pow(0.82, level - 1));
   }
 
-  function drawCell(context, x, y, size, color, alpha = 1) {
+  function drawCell(context, x, y, size, color, alpha = 1, pixelOffsetY = 0) {
     context.save();
     context.globalAlpha = alpha;
     const px = x * size;
-    const py = y * size;
+    const py = y * size + pixelOffsetY;
     const grad = context.createLinearGradient(px, py, px + size, py + size);
     grad.addColorStop(0, lighten(color, 24));
     grad.addColorStop(0.54, color);
@@ -145,11 +156,48 @@
     }
     board.forEach((row, y) => {
       row.forEach((cell, x) => {
-        if (cell) drawCell(ctx, x, y, BLOCK, COLORS[cell]);
+        if (!cell) return;
+        if (lineClearAnimation?.rows.includes(y)) {
+          drawClearingCell(x, y, COLORS[cell]);
+        } else {
+          drawCell(ctx, x, y, BLOCK, COLORS[cell], 1, getBoardDropOffset(y));
+        }
       });
     });
-    drawGhost();
-    drawMatrix(ctx, current.matrix, current.x, current.y, BLOCK, COLORS[current.type]);
+    if (current?.matrix?.length && !lineClearAnimation) {
+      drawGhost();
+      drawMatrix(ctx, current.matrix, current.x, current.y, BLOCK, COLORS[current.type]);
+    }
+  }
+
+  function drawClearingCell(x, y, color) {
+    const elapsed = performance.now() - lineClearAnimation.start;
+    const progress = Math.min(1, elapsed / lineClearAnimation.duration);
+    const intensity = lineClearAnimation.rows.length;
+    const flash = Math.sin(progress * Math.PI * (5 + intensity * 2));
+    const alpha = Math.max(0, 1 - Math.pow(progress, 1.7) * 1.15);
+    const pulse = 1 + Math.max(0, flash) * (0.06 + intensity * 0.025);
+    const size = BLOCK * pulse;
+    const px = x * BLOCK + (BLOCK - size) / 2;
+    const py = y * BLOCK + (BLOCK - size) / 2;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = `rgba(255,255,255,${0.25 + intensity * 0.1})`;
+    ctx.shadowBlur = 12 + intensity * 7;
+    ctx.fillStyle = flash > 0.15 ? "#ffffff" : color;
+    ctx.fillRect(px + 1, py + 1, size - 2, size - 2);
+    ctx.strokeStyle = "rgba(255,255,255,.48)";
+    ctx.strokeRect(px + 1.5, py + 1.5, size - 3, size - 3);
+    ctx.restore();
+  }
+
+  function getBoardDropOffset(row) {
+    if (!boardDropAnimation) return 0;
+    const offset = boardDropAnimation.offsets[row] || 0;
+    if (!offset) return 0;
+    const progress = Math.min(1, (performance.now() - boardDropAnimation.start) / boardDropAnimation.duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    return -offset * BLOCK * (1 - eased);
   }
 
   function drawGhost() {
@@ -207,6 +255,7 @@
       if (!collides(current, kick, 0, rotated)) {
         current.x += kick;
         current.matrix = rotated;
+        playSfx("rotate");
         return;
       }
     }
@@ -236,39 +285,88 @@
       distance++;
     }
     score += distance * 2;
+    playSfx("hardDrop");
     lockPiece();
   }
 
   function lockPiece() {
     merge();
-    clearLines();
-    current = next;
-    next = createPiece();
-    if (collides(current, 0, 0)) resetGame();
-    drawNext();
-    updateHud();
+    const fullRows = getFullRows();
+    if (fullRows.length) {
+      startLineClear(fullRows);
+      return;
+    }
+    spawnNextPiece();
   }
 
-  function clearLines() {
-    let cleared = 0;
+  function getFullRows() {
+    const fullRows = [];
     outer: for (let y = ROWS - 1; y >= 0; y--) {
       for (let x = 0; x < COLS; x++) {
         if (!board[y][x]) continue outer;
       }
-      board.splice(y, 1);
-      board.unshift(Array(COLS).fill(null));
-      cleared++;
-      y++;
+      fullRows.push(y);
     }
-    if (!cleared) return;
+    return fullRows;
+  }
+
+  function startLineClear(rows) {
+    const cleared = rows.length;
+    paused = true;
+    current = { type: "T", matrix: [], x: 0, y: 0 };
+    lineClearAnimation = {
+      rows,
+      start: performance.now(),
+      duration: 300 + cleared * 105,
+    };
+    playSfx("lineClear");
     lines += cleared;
     score += SCORE_TABLE[cleared] * level;
     const newLevel = Math.floor(lines / LEVEL_LINES) + 1;
     if (newLevel !== level) {
       level = newLevel;
       dropInterval = getDropInterval();
-      if (level >= 10 && !cinematicStarted) startCinematic();
+      playSfx("levelUp");
     }
+    updateHud();
+  }
+
+  function finishLineClear() {
+    const rows = [...lineClearAnimation.rows].sort((a, b) => a - b);
+    const cleared = rows.length;
+    const newBoard = makeBoard();
+    const offsets = Array(ROWS).fill(0);
+    for (let oldY = ROWS - 1; oldY >= 0; oldY--) {
+      if (rows.includes(oldY)) continue;
+      const drop = rows.filter((row) => row > oldY).length;
+      const newY = oldY + drop;
+      newBoard[newY] = board[oldY].slice();
+      offsets[newY] = drop;
+    }
+    board = newBoard;
+    lineClearAnimation = null;
+    boardDropAnimation = {
+      offsets,
+      start: performance.now(),
+      duration: 170 + cleared * 75,
+    };
+    if (shouldTriggerSurprise()) {
+      setTimeout(startCinematic, boardDropAnimation.duration + 120);
+      return;
+    }
+    setTimeout(() => {
+      boardDropAnimation = null;
+      paused = false;
+      spawnNextPiece();
+    }, boardDropAnimation.duration);
+  }
+
+  function spawnNextPiece() {
+    current = next;
+    next = createPiece();
+    if (collides(current, 0, 0)) resetGame();
+    drawNext();
+    updateHud();
   }
 
   function resetGame() {
@@ -278,6 +376,8 @@
     score = 0;
     level = 1;
     lines = 0;
+    lineClearAnimation = null;
+    boardDropAnimation = null;
     dropInterval = getDropInterval();
     updateHud();
     drawNext();
@@ -300,6 +400,15 @@
     } else {
       pollGamepad();
     }
+    if (lineClearAnimation && time - lineClearAnimation.start >= lineClearAnimation.duration) {
+      finishLineClear();
+    }
+    if (boardDropAnimation && time - boardDropAnimation.start >= boardDropAnimation.duration && !lineClearAnimation) {
+      boardDropAnimation = null;
+    }
+    if (running && !paused && shouldTriggerSurprise()) {
+      startCinematic();
+    }
     draw();
     requestAnimationFrame(update);
   }
@@ -308,13 +417,33 @@
     intro.classList.add("hidden");
     running = true;
     paused = false;
+    if (!playStartedAt) playStartedAt = performance.now();
     unlockAudio();
+  }
+
+  function shouldTriggerSurprise() {
+    if (cinematicStarted) return false;
+    const elapsed = playStartedAt ? performance.now() - playStartedAt : 0;
+    return level >= 10 || elapsed >= SURPRISE_TIME;
   }
 
   function unlockAudio() {
     audioUnlocked = true;
     mainMusic.volume = Number(volume.value);
     mainMusic.play().catch(() => {});
+    Object.values(sfx).forEach((audio) => {
+      audio.volume = Math.min(1, Number(volume.value) * 1.25);
+      audio.load();
+    });
+  }
+
+  function playSfx(name) {
+    if (!audioUnlocked || cinematicStarted) return;
+    const audio = sfx[name];
+    if (!audio) return;
+    audio.volume = Math.min(1, Number(volume.value) * 1.25);
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
   }
 
   function fadeAudio(audio, to, duration, done) {
@@ -330,9 +459,14 @@
   }
 
   async function startCinematic() {
+    if (cinematicStarted) return;
     cinematicStarted = true;
     paused = true;
     running = false;
+    touchSoftDrop = false;
+    keySoftDrop = false;
+    gamepadSoftDrop = false;
+    stopTouchRepeats();
     fade.classList.add("show");
     fadeAudio(mainMusic, 0, 1500, () => {
       mainMusic.pause();
@@ -569,6 +703,8 @@
     const action = button.dataset.action;
     button.addEventListener("pointerdown", (event) => {
       event.preventDefault();
+      button.setPointerCapture?.(event.pointerId);
+      button.classList.add("pressed");
       if (!audioUnlocked) unlockAudio();
       if (action === "left") move(-1);
       if (action === "right") move(1);
@@ -578,19 +714,49 @@
         touchSoftDrop = true;
         playerDrop(true);
       }
+      if (action === "left" || action === "right") startTouchRepeat(action, () => move(action === "left" ? -1 : 1));
     });
-    button.addEventListener("pointerup", () => {
+    const release = () => {
+      button.classList.remove("pressed");
+      stopTouchRepeat(action);
       if (action === "down") touchSoftDrop = false;
-    });
-    button.addEventListener("pointerleave", () => {
-      if (action === "down") touchSoftDrop = false;
-    });
+    };
+    button.addEventListener("pointerup", release);
+    button.addEventListener("pointercancel", release);
+    button.addEventListener("pointerleave", release);
   });
+
+  function startTouchRepeat(action, callback) {
+    stopTouchRepeat(action);
+    touchRepeatTimers[action] = {
+      delay: setTimeout(() => {
+        callback();
+        touchRepeatTimers[action].interval = setInterval(callback, 72);
+      }, 150),
+      interval: null,
+    };
+  }
+
+  function stopTouchRepeat(action) {
+    const timers = touchRepeatTimers[action];
+    if (!timers) return;
+    clearTimeout(timers.delay);
+    clearInterval(timers.interval);
+    delete touchRepeatTimers[action];
+  }
+
+  function stopTouchRepeats() {
+    Object.keys(touchRepeatTimers).forEach(stopTouchRepeat);
+    document.querySelectorAll("[data-action].pressed").forEach((button) => button.classList.remove("pressed"));
+  }
 
   volume.addEventListener("input", () => {
     const value = Number(volume.value);
     if (!cinematicStarted) mainMusic.volume = value;
     cinemaMusic.volume = value;
+    Object.values(sfx).forEach((audio) => {
+      audio.volume = Math.min(1, value * 1.25);
+    });
   });
 
   startButton.addEventListener("click", startGame);
